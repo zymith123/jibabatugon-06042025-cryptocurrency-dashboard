@@ -1,6 +1,8 @@
 <template>
   <UApp>
-    <Navbar />
-    <NuxtPage />
+    <div class="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+      <Navbar />
+      <NuxtPage />
+    </div>
   </UApp>
 </template>
