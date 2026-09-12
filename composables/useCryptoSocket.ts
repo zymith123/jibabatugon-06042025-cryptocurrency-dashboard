@@ -8,8 +8,11 @@ export interface TickerData {
   volume: number
 }
 
+const POLL_INTERVAL_MS = 10000
+
 let socket: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let pollTimer: ReturnType<typeof setInterval> | null = null
 let subscriberCount = 0
 let symbolSet = new Set<string>()
 
@@ -39,6 +42,33 @@ export function useCryptoSocket() {
     }
   }
 
+  // Binance pushes updates over the WebSocket automatically, but some
+  // networks (corporate proxies/firewalls) let the socket connect while
+  // silently dropping its data frames. Polling the REST endpoint on an
+  // interval guarantees prices still load in that case, while the socket
+  // still provides faster updates wherever it isn't blocked.
+  const pollTickers = async () => {
+    try {
+      const res = await fetch('https://api.binance.com/api/v3/ticker/24hr')
+      if (!res.ok) return
+      const data = await res.json() as Array<any>
+      for (const t of data) {
+        const symbol = t.symbol.toLowerCase()
+        if (symbolSet.has(symbol)) {
+          tickers.value[symbol] = {
+            price: parseFloat(t.lastPrice),
+            changePercent: parseFloat(t.priceChangePercent),
+            high: parseFloat(t.highPrice),
+            low: parseFloat(t.lowPrice),
+            volume: parseFloat(t.volume),
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[crypto-socket] REST poll failed', err)
+    }
+  }
+
   const connect = () => {
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return
 
@@ -46,19 +76,14 @@ export function useCryptoSocket() {
 
     socket.onopen = () => {
       connected.value = true
-      console.log('[crypto-socket] connection opened')
     }
-
-    let loggedFirstMessage = false
 
     socket.onmessage = (event) => {
       try {
         const tickerList = JSON.parse(event.data) as Array<any>
-        let matched = 0
         for (const ticker of tickerList) {
           const symbol = ticker.s.toLowerCase()
           if (symbolSet.has(symbol)) {
-            matched++
             tickers.value[symbol] = {
               price: parseFloat(ticker.c),
               changePercent: parseFloat(ticker.P),
@@ -68,24 +93,18 @@ export function useCryptoSocket() {
             }
           }
         }
-        if (!loggedFirstMessage) {
-          loggedFirstMessage = true
-          console.log(`[crypto-socket] first message: ${tickerList.length} tickers received, ${matched} matched known symbols (symbolSet size: ${symbolSet.size})`)
-        }
       } catch (err) {
         console.error('[crypto-socket] failed to process message', err)
       }
     }
 
-    socket.onclose = (event) => {
+    socket.onclose = () => {
       connected.value = false
-      console.log(`[crypto-socket] connection closed (code: ${event.code}, reason: ${event.reason || 'none'})`)
       reconnectTimer = setTimeout(connect, 3000)
     }
 
-    socket.onerror = (event) => {
+    socket.onerror = () => {
       connected.value = false
-      console.error('[crypto-socket] connection error', event)
     }
   }
 
@@ -93,12 +112,20 @@ export function useCryptoSocket() {
     subscriberCount++
     await fetchSymbols()
     connect()
+    if (!pollTimer) {
+      pollTickers()
+      pollTimer = setInterval(pollTickers, POLL_INTERVAL_MS)
+    }
   })
 
   onUnmounted(() => {
     subscriberCount--
     if (subscriberCount <= 0) {
       if (reconnectTimer) clearTimeout(reconnectTimer)
+      if (pollTimer) {
+        clearInterval(pollTimer)
+        pollTimer = null
+      }
       socket?.close()
       socket = null
     }
