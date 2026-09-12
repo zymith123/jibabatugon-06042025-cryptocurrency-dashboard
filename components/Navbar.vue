@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const { connected } = useCryptoSocket()
+const { balance } = usePortfolio()
 </script>
 
 <template>
@@ -11,6 +12,11 @@ const { connected } = useCryptoSocket()
       </NuxtLink>
 
       <div class="flex items-center gap-6">
+        <div class="hidden sm:flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-white/5 text-gray-200">
+          <span class="text-gray-400">Balance</span>
+          <span class="font-mono font-semibold text-emerald-400">{{ formatUsd(balance) }}</span>
+        </div>
+
         <div class="hidden sm:flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full"
           :class="connected ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'"
         >

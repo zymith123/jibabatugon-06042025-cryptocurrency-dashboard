@@ -3,6 +3,7 @@ const props = defineProps<{
   show: boolean
   symbol: string
   price: number
+  balance: number
 }>()
 
 const emit = defineEmits(['close', 'confirm'])
@@ -12,11 +13,17 @@ const show = ref(false)
 
 watchEffect(() => {
   show.value = props.show
-  if (props.show) quantity.value = 1
+  if (props.show) quantity.value = props.price > 0 ? parseFloat((props.balance / props.price / 4).toFixed(8)) : 1
 })
 
 const total = computed(() => quantity.value * props.price)
-const isValid = computed(() => quantity.value > 0 && Number.isFinite(quantity.value))
+const isValid = computed(() => quantity.value > 0 && Number.isFinite(quantity.value) && total.value <= props.balance)
+const exceedsBalance = computed(() => quantity.value > 0 && total.value > props.balance)
+
+function setPercent(pct: number) {
+  if (!props.price) return
+  quantity.value = parseFloat(((props.balance * pct) / props.price).toFixed(8))
+}
 
 function confirmBuy() {
   if (!isValid.value) return
@@ -44,7 +51,9 @@ function confirmBuy() {
         &times;
       </button>
       <h2 class="text-xl font-bold mb-1">Buy {{ props.symbol }}</h2>
-      <p class="text-sm text-gray-500 dark:text-gray-400 mb-5">Simulated purchase at current market price</p>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-5">
+        Simulated purchase at current market price · Available: {{ formatUsd(props.balance) }}
+      </p>
 
       <div class="mb-4">
         <label class="block text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">Price (USD)</label>
@@ -54,7 +63,20 @@ function confirmBuy() {
       </div>
 
       <div class="mb-4">
-        <label class="block text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">Quantity</label>
+        <div class="flex items-center justify-between mb-1">
+          <label class="block text-sm font-medium text-gray-600 dark:text-gray-300">Quantity</label>
+          <div class="flex gap-1">
+            <button
+              v-for="pct in [0.25, 0.5, 0.75, 1]"
+              :key="pct"
+              type="button"
+              class="text-xs px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-300 hover:bg-emerald-50 hover:border-emerald-300 dark:hover:bg-emerald-900/30 transition-colors"
+              @click="setPercent(pct)"
+            >
+              {{ pct === 1 ? 'Max' : `${pct * 100}%` }}
+            </button>
+          </div>
+        </div>
         <input
           v-model.number="quantity"
           type="number"
@@ -63,7 +85,8 @@ function confirmBuy() {
           class="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
           placeholder="Enter quantity"
         />
-        <p v-if="!isValid" class="text-xs text-rose-500 mt-1">Enter a quantity greater than 0</p>
+        <p v-if="quantity <= 0" class="text-xs text-rose-500 mt-1">Enter a quantity greater than 0</p>
+        <p v-else-if="exceedsBalance" class="text-xs text-rose-500 mt-1">Exceeds your available balance</p>
       </div>
 
       <div class="mb-6">

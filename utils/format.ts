@@ -19,3 +19,13 @@ export function formatCompact(value?: number): string {
   if (value === undefined || value === null || Number.isNaN(value)) return '—'
   return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 }).format(value)
 }
+
+export function formatDateTime(timestamp?: number): string {
+  if (!timestamp) return '—'
+  return new Date(timestamp).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}

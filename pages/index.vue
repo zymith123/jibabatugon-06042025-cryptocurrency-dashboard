@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const { symbols, tickers, loading, error } = useCryptoSocket()
-const { addCrpyto } = usePortfolio()
+const { balance, buy } = usePortfolio()
 
 const currentPage = ref(1)
 const itemsPerPage = 10
@@ -64,8 +64,12 @@ function openBuyModal(symbol: string, priceProps: number) {
 }
 
 function handleBuy({ symbol, price, quantity, total }: { symbol: string, price: number, quantity: number, total: number }) {
-  addCrpyto(symbol, price, quantity, total)
-  useToast().add({ title: 'Buy Successful', description: `Bought ${quantity} ${symbol} for ${formatUsd(total)}`, color: 'success' })
+  const result = buy(symbol, price, quantity)
+  if (result.success) {
+    useToast().add({ title: 'Buy Successful', description: `Bought ${quantity} ${symbol} for ${formatUsd(total)}`, color: 'success' })
+  } else {
+    useToast().add({ title: 'Buy Failed', description: result.message, color: 'error' })
+  }
 }
 
 const paginatedData = computed(() => {
@@ -93,7 +97,11 @@ const showingPages = computed(() => [currentPage.value - 1, currentPage.value, c
       </p>
     </div>
 
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+      <UCard>
+        <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Balance</p>
+        <p class="text-2xl font-bold mt-1 text-emerald-500">{{ formatUsd(balance) }}</p>
+      </UCard>
       <UCard>
         <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Tracked Coins</p>
         <p class="text-2xl font-bold mt-1">{{ allData.length || '—' }}</p>
@@ -236,6 +244,7 @@ const showingPages = computed(() => [currentPage.value - 1, currentPage.value, c
       :show="showModal"
       :symbol="selectedSymbol"
       :price="selectedPrice"
+      :balance="balance"
       @close="showModal = false"
       @confirm="handleBuy"
     />
