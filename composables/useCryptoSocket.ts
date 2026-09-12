@@ -46,31 +46,46 @@ export function useCryptoSocket() {
 
     socket.onopen = () => {
       connected.value = true
+      console.log('[crypto-socket] connection opened')
     }
 
+    let loggedFirstMessage = false
+
     socket.onmessage = (event) => {
-      const tickerList = JSON.parse(event.data) as Array<any>
-      for (const ticker of tickerList) {
-        const symbol = ticker.s.toLowerCase()
-        if (symbolSet.has(symbol)) {
-          tickers.value[symbol] = {
-            price: parseFloat(ticker.c),
-            changePercent: parseFloat(ticker.P),
-            high: parseFloat(ticker.h),
-            low: parseFloat(ticker.l),
-            volume: parseFloat(ticker.v),
+      try {
+        const tickerList = JSON.parse(event.data) as Array<any>
+        let matched = 0
+        for (const ticker of tickerList) {
+          const symbol = ticker.s.toLowerCase()
+          if (symbolSet.has(symbol)) {
+            matched++
+            tickers.value[symbol] = {
+              price: parseFloat(ticker.c),
+              changePercent: parseFloat(ticker.P),
+              high: parseFloat(ticker.h),
+              low: parseFloat(ticker.l),
+              volume: parseFloat(ticker.v),
+            }
           }
         }
+        if (!loggedFirstMessage) {
+          loggedFirstMessage = true
+          console.log(`[crypto-socket] first message: ${tickerList.length} tickers received, ${matched} matched known symbols (symbolSet size: ${symbolSet.size})`)
+        }
+      } catch (err) {
+        console.error('[crypto-socket] failed to process message', err)
       }
     }
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       connected.value = false
+      console.log(`[crypto-socket] connection closed (code: ${event.code}, reason: ${event.reason || 'none'})`)
       reconnectTimer = setTimeout(connect, 3000)
     }
 
-    socket.onerror = () => {
+    socket.onerror = (event) => {
       connected.value = false
+      console.error('[crypto-socket] connection error', event)
     }
   }
 
