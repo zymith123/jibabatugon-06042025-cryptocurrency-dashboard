@@ -3,6 +3,10 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineNuxtConfig({
   compatibilityDate: '2025-05-15',
   devtools: { enabled: true },
+  // All meaningful data here is client-only (Binance WebSocket prices, the
+  // paper trading account in localStorage), so SSR would just hydrate a
+  // stale/empty shell on every load - render as a pure SPA instead.
+  ssr: false,
   css: ['~/assets/css/main.css'],
   modules: ['@nuxt/ui'],
   app: {

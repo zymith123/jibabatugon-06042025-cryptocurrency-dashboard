@@ -1,14 +1,19 @@
 <script setup lang="ts">
 import type { Position } from '~/composables/usePortfolio'
 
-const { balance, positions, closedTrades, closePosition, resetAccount } = usePortfolio()
+const { balance, startingBalance, createdAt, positions, closedTrades, closePosition, resetAccount } = usePortfolio()
 const { tickers } = useCryptoSocket()
 
 const showSellModal = ref(false)
 const selectedPosition = ref<Position | null>(null)
+const showResetModal = ref(false)
 
 function currentPrice(symbol: string): number | undefined {
   return tickers.value[symbol.toLowerCase() + 'usdt']?.price
+}
+
+function coinLink(symbol: string): string {
+  return `/coin/${symbol.toLowerCase()}usdt`
 }
 
 const openRows = computed(() => {
@@ -24,12 +29,12 @@ const openRows = computed(() => {
 const holdingsValue = computed(() => openRows.value.reduce((sum, r) => sum + (r.currentValue ?? r.cost), 0))
 const totalEquity = computed(() => balance.value + holdingsValue.value)
 const unrealizedPnl = computed(() => openRows.value.reduce((sum, r) => sum + (r.pnl ?? 0), 0))
-const realizedPnl = computed(() => closedTrades.value.reduce((sum, t) => sum + t.pnl, 0))
-const totalPnl = computed(() => unrealizedPnl.value + realizedPnl.value)
-const totalPnlPercent = computed(() => (totalPnl.value / STARTING_BALANCE) * 100)
+const stats = computed(() => computeTradingStats(startingBalance.value, createdAt.value, closedTrades.value))
+const totalPnl = computed(() => unrealizedPnl.value + stats.value.netPnl)
+const totalPnlPercent = computed(() => (startingBalance.value ? (totalPnl.value / startingBalance.value) * 100 : 0))
 
-const winCount = computed(() => closedTrades.value.filter(t => t.pnl > 0).length)
-const winRate = computed(() => (closedTrades.value.length ? (winCount.value / closedTrades.value.length) * 100 : null))
+const equityChartPoints = computed(() => stats.value.equityCurve.map(p => ({ t: p.t, value: p.equity })))
+const equityChartColor = computed(() => (totalEquity.value >= startingBalance.value ? '#10b981' : '#f43f5e'))
 
 function openSellModal(position: Position) {
   selectedPosition.value = position
@@ -48,10 +53,15 @@ function handleClose({ id, quantity, exitPrice }: { id: string, quantity: number
   }
 }
 
-function handleReset() {
-  if (!confirm('Reset your paper trading account? This will clear your balance, open positions, and trade history.')) return
-  resetAccount()
-  useToast().add({ title: 'Account reset', description: `Balance restored to ${formatUsd(STARTING_BALANCE)}`, color: 'neutral' })
+function handleReset(amount: number) {
+  resetAccount(amount)
+  useToast().add({ title: 'Account reset', description: `Balance restored to ${formatUsd(amount)}`, color: 'neutral' })
+}
+
+function formatProfitFactor(pf: number | null): string {
+  if (pf === null) return '—'
+  if (!Number.isFinite(pf)) return '∞'
+  return pf.toFixed(2)
 }
 </script>
 
@@ -62,7 +72,7 @@ function handleReset() {
         <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight">Portfolio</h1>
         <p class="text-gray-500 dark:text-gray-400">Paper trading account · valued in real time</p>
       </div>
-      <UButton color="neutral" variant="outline" @click="handleReset">Reset Account</UButton>
+      <UButton color="neutral" variant="outline" @click="showResetModal = true">Reset Account</UButton>
     </div>
 
     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
@@ -87,8 +97,68 @@ function handleReset() {
       </UCard>
       <UCard>
         <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Win Rate</p>
-        <p class="text-xl font-bold mt-1">{{ winRate !== null ? formatPercent(winRate).replace('+', '') : '—' }}</p>
+        <p class="text-xl font-bold mt-1">{{ stats.winRate !== null ? formatPercent(stats.winRate).replace('+', '') : '—' }}</p>
       </UCard>
+    </div>
+
+    <div class="space-y-3">
+      <h2 class="text-lg font-semibold">Equity Curve</h2>
+      <UCard>
+        <LineChart
+          v-if="equityChartPoints.length > 1"
+          :points="equityChartPoints"
+          :color="equityChartColor"
+          :baseline="startingBalance"
+          :value-formatter="(v) => formatCompact(v)"
+          :time-formatter="(t) => formatDateTime(t)"
+        />
+        <p v-else class="text-sm text-gray-500 dark:text-gray-400 text-center py-16">
+          Close a trade to start plotting your equity curve
+        </p>
+      </UCard>
+    </div>
+
+    <div class="space-y-3">
+      <h2 class="text-lg font-semibold">Performance Summary</h2>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <UCard>
+          <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Total Trades</p>
+          <p class="text-lg font-bold mt-1">{{ stats.totalTrades }}</p>
+        </UCard>
+        <UCard>
+          <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Profit Factor</p>
+          <p class="text-lg font-bold mt-1">{{ formatProfitFactor(stats.profitFactor) }}</p>
+        </UCard>
+        <UCard>
+          <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Max Drawdown</p>
+          <p class="text-lg font-bold mt-1 text-rose-500">
+            {{ stats.maxDrawdown > 0 ? `-${formatUsd(stats.maxDrawdown)}` : formatUsd(0) }}
+            <span class="text-sm">({{ stats.maxDrawdownPercent.toFixed(1) }}%)</span>
+          </p>
+        </UCard>
+        <UCard>
+          <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Realized P&amp;L</p>
+          <p class="text-lg font-bold mt-1" :class="stats.netPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'">
+            {{ stats.netPnl >= 0 ? '+' : '' }}{{ formatUsd(stats.netPnl) }}
+          </p>
+        </UCard>
+        <UCard>
+          <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Avg Win</p>
+          <p class="text-lg font-bold mt-1 text-emerald-500">{{ formatUsd(stats.avgWin) }}</p>
+        </UCard>
+        <UCard>
+          <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Avg Loss</p>
+          <p class="text-lg font-bold mt-1 text-rose-500">{{ formatUsd(-stats.avgLoss) }}</p>
+        </UCard>
+        <UCard>
+          <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Best Trade</p>
+          <p class="text-lg font-bold mt-1 text-emerald-500">{{ stats.bestTrade !== null ? formatUsd(stats.bestTrade) : '—' }}</p>
+        </UCard>
+        <UCard>
+          <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Worst Trade</p>
+          <p class="text-lg font-bold mt-1 text-rose-500">{{ stats.worstTrade !== null ? formatUsd(stats.worstTrade) : '—' }}</p>
+        </UCard>
+      </div>
     </div>
 
     <div class="space-y-3">
@@ -113,7 +183,9 @@ function handleReset() {
                 :key="row.id"
                 class="bg-white dark:bg-gray-900 border-b dark:border-gray-800 border-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800/60 transition-colors"
               >
-                <td class="px-4 py-3 font-semibold text-gray-900 dark:text-white">{{ row.symbol }}</td>
+                <td class="px-4 py-3 font-semibold text-gray-900 dark:text-white">
+                  <NuxtLink :to="coinLink(row.symbol)" class="hover:text-emerald-500 transition-colors">{{ row.symbol }}</NuxtLink>
+                </td>
                 <td class="px-4 py-3 font-mono">{{ formatUsd(row.entryPrice) }}</td>
                 <td class="px-4 py-3">{{ row.quantity }}</td>
                 <td class="px-4 py-3">{{ formatUsd(row.cost) }}</td>
@@ -163,7 +235,9 @@ function handleReset() {
                 :key="trade.id"
                 class="bg-white dark:bg-gray-900 border-b dark:border-gray-800 border-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800/60 transition-colors"
               >
-                <td class="px-4 py-3 font-semibold text-gray-900 dark:text-white">{{ trade.symbol }}</td>
+                <td class="px-4 py-3 font-semibold text-gray-900 dark:text-white">
+                  <NuxtLink :to="coinLink(trade.symbol)" class="hover:text-emerald-500 transition-colors">{{ trade.symbol }}</NuxtLink>
+                </td>
                 <td class="px-4 py-3 font-mono">{{ formatUsd(trade.entryPrice) }}</td>
                 <td class="px-4 py-3 font-mono">{{ formatUsd(trade.exitPrice) }}</td>
                 <td class="px-4 py-3">{{ trade.quantity }}</td>
@@ -185,6 +259,14 @@ function handleReset() {
       :current-price="selectedPosition ? currentPrice(selectedPosition.symbol) : undefined"
       @close="showSellModal = false"
       @confirm="handleClose"
+    />
+
+    <AccountSetupModal
+      :show="showResetModal"
+      mode="reset"
+      :current-balance="startingBalance"
+      @close="showResetModal = false"
+      @confirm="handleReset"
     />
   </div>
 </template>

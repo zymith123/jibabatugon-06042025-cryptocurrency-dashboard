@@ -21,10 +21,13 @@ export interface ClosedTrade {
   closedAt: number
 }
 
-export const STARTING_BALANCE = 10000
-const STORAGE_KEY = 'crypto-paper-trading-v1'
+export const DEFAULT_STARTING_BALANCE = 10000
+const STORAGE_KEY = 'crypto-paper-trading-v2'
 
 interface PersistedState {
+  hasAccount: boolean
+  startingBalance: number
+  createdAt: number
   balance: number
   positions: Position[]
   closedTrades: ClosedTrade[]
@@ -60,11 +63,31 @@ function persist(state: PersistedState) {
 }
 
 export function usePortfolio() {
-  const balance = useState<number>('paper-balance', () => loadPersisted()?.balance ?? STARTING_BALANCE)
+  const hasAccount = useState<boolean>('paper-has-account', () => loadPersisted()?.hasAccount ?? false)
+  const startingBalance = useState<number>('paper-starting-balance', () => loadPersisted()?.startingBalance ?? DEFAULT_STARTING_BALANCE)
+  const createdAt = useState<number>('paper-created-at', () => loadPersisted()?.createdAt ?? Date.now())
+  const balance = useState<number>('paper-balance', () => loadPersisted()?.balance ?? DEFAULT_STARTING_BALANCE)
   const positions = useState<Position[]>('paper-positions', () => loadPersisted()?.positions ?? [])
   const closedTrades = useState<ClosedTrade[]>('paper-closed-trades', () => loadPersisted()?.closedTrades ?? [])
 
-  const persistAll = () => persist({ balance: balance.value, positions: positions.value, closedTrades: closedTrades.value })
+  const persistAll = () => persist({
+    hasAccount: hasAccount.value,
+    startingBalance: startingBalance.value,
+    createdAt: createdAt.value,
+    balance: balance.value,
+    positions: positions.value,
+    closedTrades: closedTrades.value,
+  })
+
+  function startAccount(amount: number) {
+    hasAccount.value = true
+    startingBalance.value = amount
+    createdAt.value = Date.now()
+    balance.value = amount
+    positions.value = []
+    closedTrades.value = []
+    persistAll()
+  }
 
   function buy(symbol: string, price: number, quantity: number): { success: boolean, message?: string } {
     const cost = round2(price * quantity)
@@ -121,17 +144,18 @@ export function usePortfolio() {
     return { success: true, pnl }
   }
 
-  function resetAccount() {
-    balance.value = STARTING_BALANCE
-    positions.value = []
-    closedTrades.value = []
-    persistAll()
+  function resetAccount(amount: number) {
+    startAccount(amount)
   }
 
   return {
+    hasAccount,
+    startingBalance,
+    createdAt,
     balance,
     positions,
     closedTrades,
+    startAccount,
     buy,
     closePosition,
     resetAccount,

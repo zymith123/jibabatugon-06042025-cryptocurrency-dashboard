@@ -177,7 +177,9 @@ const showingPages = computed(() => [currentPage.value - 1, currentPage.value, c
               class="bg-white border-b dark:bg-gray-900 dark:border-gray-800 border-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800/60 transition-colors"
             >
               <th scope="row" class="px-6 py-4 font-semibold text-gray-900 whitespace-nowrap dark:text-white">
-                {{ crypto.name }}
+                <NuxtLink :to="`/coin/${crypto.symbol}`" class="hover:text-emerald-500 transition-colors">
+                  {{ crypto.name }}
+                </NuxtLink>
               </th>
               <td class="px-6 py-4 font-mono">
                 {{ crypto.price !== undefined ? formatPrice(crypto.price) : '…' }}
