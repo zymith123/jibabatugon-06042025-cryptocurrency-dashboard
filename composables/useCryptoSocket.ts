@@ -22,6 +22,7 @@ export function useCryptoSocket() {
   const connected = useState('crypto-connected', () => false)
   const loading = useState('crypto-loading', () => true)
   const error = useState<string | null>('crypto-error', () => null)
+  const nextPollAt = useState<number>('crypto-next-poll-at', () => Date.now() + POLL_INTERVAL_MS)
 
   const fetchSymbols = async () => {
     if (symbols.value.length) return
@@ -114,7 +115,11 @@ export function useCryptoSocket() {
     connect()
     if (!pollTimer) {
       pollTickers()
-      pollTimer = setInterval(pollTickers, POLL_INTERVAL_MS)
+      nextPollAt.value = Date.now() + POLL_INTERVAL_MS
+      pollTimer = setInterval(() => {
+        pollTickers()
+        nextPollAt.value = Date.now() + POLL_INTERVAL_MS
+      }, POLL_INTERVAL_MS)
     }
   })
 
@@ -137,5 +142,6 @@ export function useCryptoSocket() {
     connected,
     loading,
     error,
+    nextPollAt,
   }
 }
