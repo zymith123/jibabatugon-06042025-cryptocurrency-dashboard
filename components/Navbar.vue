@@ -1,6 +1,7 @@
 <script setup lang="ts">
-const { connected } = useCryptoSocket()
+const { connected, nextPollAt } = useCryptoSocket()
 const { balance } = usePortfolio()
+const { secondsLeft } = useCountdown(nextPollAt)
 </script>
 
 <template>
@@ -25,6 +26,7 @@ const { balance } = usePortfolio()
             <span class="relative inline-flex rounded-full h-2 w-2" :class="connected ? 'bg-emerald-500' : 'bg-amber-500'"></span>
           </span>
           {{ connected ? 'Live' : 'Connecting…' }}
+          <span class="opacity-60 font-normal">· refresh in {{ secondsLeft }}s</span>
         </div>
 
         <div class="flex items-center gap-6">
