@@ -10,6 +10,10 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
   modules: ['@nuxt/ui'],
   app: {
+    // GitHub Pages serves this at /<repo-name>/, not /, so asset URLs need
+    // that prefix baked in at build time. Set via the deploy workflow's env;
+    // defaults to '/' for local dev and other hosts that serve from root.
+    baseURL: process.env.NUXT_APP_BASE_URL || '/',
     head: {
       title: 'CryptoPulse — Live Crypto Market Dashboard',
       meta: [
