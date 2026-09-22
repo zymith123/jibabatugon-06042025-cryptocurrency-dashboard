@@ -1,14 +1,14 @@
-# Debugging a Phantom WebSocket: When "Connected" Doesn't Mean "Receiving Data"
+# The Bug Where My "Live" Prices Weren't Actually Live
 
-*A technical write-up from building [CryptoPulse](https://zymith123.github.io/jibabatugon-06042025-cryptocurrency-dashboard/), a live crypto market dashboard and paper-trading simulator.*
+*A write-up from building [CryptoPulse](https://zymith123.github.io/jibabatugon-06042025-cryptocurrency-dashboard/), a crypto market dashboard and paper-trading simulator.*
 
-## TL;DR
+## The short version
 
-The app's live price table streamed nothing but placeholders (`…`) even though the UI reported the market-data socket as "Live." The socket really was open — no error, no close event, nothing in the console. It just never received a single message. The root cause turned out to be a class of failure that's easy to miss because every layer *looks* healthy: a network intermediary (likely a corporate proxy or antivirus doing TLS inspection) was completing the WebSocket upgrade handshake and then silently discarding the data frames that followed. The fix was to stop treating the WebSocket as the only source of truth and add a REST-polling fallback on a fixed interval, so the app degrades gracefully instead of failing invisibly.
+Every price on the Market page was stuck on `…`, even though the app's own status badge said "Live." I expected a broken connection. What I actually had was a connection that opened just fine and then never sent me anything — no data, no error, no disconnect. Nothing. It took some digging to figure out that a network in between my app and Binance was quietly swallowing the data after letting the handshake through. Once I understood that, the fix was simple: stop trusting one data source, and add a second one as a backup.
 
-## Background
+## What I was building
 
-The Market page subscribes to Binance's combined ticker stream (`wss://stream.binance.com:9443/ws/!ticker@arr`) to show live prices and 24h change for ~500 USDT trading pairs. The connection lifecycle was straightforward:
+The Market page shows live prices for a few hundred crypto pairs by connecting to Binance's WebSocket feed:
 
 ```ts
 socket = new WebSocket('wss://stream.binance.com:9443/ws/!ticker@arr')
@@ -19,23 +19,19 @@ socket.onclose = () => { connected.value = false; setTimeout(connect, 3000) }
 socket.onerror = () => { connected.value = false }
 ```
 
-This worked in every environment I tested it in — until a user reported that every row showed `…` for price and 24h change, despite the navbar showing a green "Live" badge.
+Pretty standard stuff. It worked fine every time I tested it. Then someone else tried the app and told me every price was blank, even though the little "Live" badge in the corner was glowing green like everything was fine.
 
-## The investigation
+## Trying to figure out what was actually going on
 
-### Step 1: Rule out a total network failure
+My first thought was that something was blocked at the network level entirely. But that didn't hold up — the app had already pulled a real list of ~490 coins from Binance's REST API to build the price table in the first place. So Binance was reachable. Whatever was wrong was specific to the WebSocket.
 
-The REST calls that seed the symbol list (`GET /api/v3/exchangeInfo`) were succeeding — the "Tracked Coins" stat showed 490, a real number pulled from Binance. So this wasn't a case of the network being fully blocked or the API being geo-restricted. Whatever was wrong was specific to the WebSocket, not to reaching Binance at all.
+Next I wanted to make sure the "Live" badge wasn't lying to me. It only turns green inside `onopen`, so if it's on, the connection genuinely opened. I asked for a screenshot of the browser's Network tab, and sure enough: status 101, "Switching Protocols" — the handshake had completed. The socket really was open.
 
-### Step 2: Confirm the socket state matches what the UI claims
+So now I had a connection that was open, according to the browser, but delivering nothing. That's the annoying part of this kind of bug — a WebSocket failing usually looks like a failure. It errors, or it closes, or it never opens in the first place. This one did none of that. It just sat there, quiet.
 
-The `connected` flag only flips to `true` inside `onopen`, so a "Live" badge is a real signal that the handshake succeeded — not a hardcoded default. I asked the user to open DevTools and check the Network tab. The connection showed **status 101 (Switching Protocols)**, confirming the WebSocket handshake completed successfully.
+## Stop guessing, start logging
 
-At this point I had two live variables that disagreed: the *transport* was healthy, but the *data* wasn't arriving. That mismatch is the interesting part of this bug — most WebSocket failures show up as a failed handshake, a close event, or an error event. This one showed none of those.
-
-### Step 3: Instrument, don't guess
-
-Rather than speculate further, I added structured logging to every socket event, including a one-time summary on the first message received:
+At this point I didn't have enough information to have an opinion, so instead of guessing I added logging to every single thing that could happen to the socket:
 
 ```ts
 socket.onopen = () => {
@@ -68,28 +64,23 @@ socket.onerror = (event) => {
 }
 ```
 
-This is a deliberately narrow diagnostic: it answers exactly one question — *does data ever arrive, and if not, does anything at all fire on this socket after `onopen`?*
+Nothing clever here — I just wanted one question answered: after the connection opens, does *anything at all* happen next?
 
-### Step 4: Read the signal
-
-The result, after a full page load and several seconds of waiting:
+The answer came back a few minutes later, and it was almost funny in how little it said:
 
 ```
 [crypto-socket] connection opened
 ```
 
-...and nothing else. No `first message` log. No `error`. No `closed`. The socket sat there, technically open, receiving zero bytes, indefinitely.
+That's it. No message log. No error. No close. Just... opened, and then silence, for as long as anyone waited.
 
-This ruled out several plausible causes at once:
-- **Not a JS parsing bug** — if malformed data were arriving, `onmessage` would fire and either succeed or hit the `catch` block. Neither happened, so no data was arriving at the application layer at all.
-- **Not a dropped/closed connection** — `onclose` never fired, so the TCP/TLS connection was still technically alive.
-- **Not a symbol-matching bug** — that only matters once a message exists to be checked against `symbolSet`.
+That one line ruled out a surprising number of things at once. It wasn't a parsing bug, because `onmessage` never even fired — there was nothing to parse. It wasn't a dropped connection, because `onclose` never fired either. It wasn't my symbol-matching logic, because that code only runs once a message shows up, and none ever did.
 
-That left one explanation: something *between* the browser and Binance was allowing the WebSocket upgrade to complete, then filtering or buffering the subsequent data frames without ever tearing down the connection. This is a known, if under-discussed, failure mode with certain corporate proxies and antivirus products that perform TLS interception — many of them handle standard HTTPS request/response cycles correctly but mishandle long-lived, frame-based protocols like WebSocket, since the proxy has to re-implement framing and buffering rather than just relaying bytes.
+Which left exactly one explanation: something sitting between the browser and Binance was letting the WebSocket handshake through, and then quietly dropping every message after that, without ever closing the connection. Digging around, this turned out to be a known headache with certain corporate firewalls and antivirus tools that inspect HTTPS traffic — they're built to handle normal request/response web traffic, but WebSocket is a different beast (one long-lived connection streaming frames instead of separate replies), and some of these tools just don't forward the frames correctly.
 
-## The fix: don't depend on a single transport
+## The fix: don't put all my eggs in one basket
 
-The pragmatic fix wasn't to chase a network configuration I don't control — it was to make the app resilient to it. Binance also exposes the same ticker data over plain REST (`GET /api/v3/ticker/24hr`), which had already proven reliable in this environment. I added a polling fallback that runs alongside the WebSocket, on a fixed interval, sharing the same update path:
+I couldn't do anything about someone else's firewall. What I could do was stop assuming the WebSocket was the only way to get price data. Binance also has a plain REST endpoint that returns the same prices, and it was clearly working fine — the app was already using it to get the coin list. So I added a second, independent way to refresh prices: just poll that endpoint every 10 seconds.
 
 ```ts
 const POLL_INTERVAL_MS = 10000
@@ -117,13 +108,13 @@ const pollTickers = async () => {
 }
 ```
 
-The WebSocket stays in place and still wins the race on any network where it isn't blocked — messages arrive roughly once a second, far faster than a 10-second poll. But now the app has a guaranteed floor: even in the worst case, prices refresh within 10 seconds using a transport that's already proven to work. Neither mechanism needs to know about the other; they both just write into the same reactive `tickers` state.
+The WebSocket is still there and still does most of the work — on a normal network it updates the screen roughly once a second, way faster than any 10-second poll could. But now there's a safety net underneath it. Even in the worst case, someone's prices will still refresh, just a bit slower, using a path that's already proven to work. Both mechanisms just write into the same shared state, so neither one needs to know the other exists.
 
-I also surfaced the poll cycle in the UI as a small "refresh in Xs" countdown next to the connection badge, so the 10-second worst case is communicated honestly instead of implying real-time precision the app can't always guarantee.
+I also added a small "refresh in Xs" countdown next to the status badge, so if someone is on the slower path, the app is honest about it instead of pretending everything's instant.
 
-## Verification
+## Making sure the fix actually worked
 
-Since I couldn't reproduce the blocking network locally, I verified the fix by reproducing the *symptom* instead: using Playwright, I mocked the REST endpoints to respond normally, then intercepted the WebSocket route to complete the handshake but never send a message — replicating the exact failure mode from the logs.
+I never had access to the network that caused this in the first place, so I couldn't just "try it again and see." Instead, I recreated the exact symptom on purpose. Using Playwright, I let the REST calls respond normally but told the test to open the WebSocket connection and then never send it a single message — exactly what the logs had shown me:
 
 ```ts
 await page.routeWebSocket('wss://stream.binance.com:9443/ws/!ticker@arr', ws => {
@@ -133,11 +124,11 @@ await page.routeWebSocket('wss://stream.binance.com:9443/ws/!ticker@arr', ws => 
 })
 ```
 
-With that in place, prices, 24h change, and gainers/losers all populated correctly within 10 seconds via the polling path — confirming the fallback works independently of whatever was silently dropping frames on the original network.
+With that setup, prices, 24-hour changes, and the gainers/losers stats all showed up correctly within 10 seconds anyway, coming entirely from the polling fallback. That told me the fix wasn't just theoretically sound — it actually held up under the same conditions that broke things the first time.
 
-## Takeaways
+## What I took away from this
 
-- **A green "connected" indicator is a claim about the transport, not about the data.** When a live feed goes quiet, check whether the *connection* is actually the thing that's broken, or whether something upstream can hold a connection open while starving it.
-- **Instrument before you theorize.** A few `console.log` calls at each state transition turned a vague "it's not working" into a precise, falsifiable set of facts, which made the root cause obvious rather than guessed at.
-- **Prefer layered resilience over a single "correct" transport.** Rather than treating the WebSocket as the one true source of live data, giving the app a second, independently-reliable path (REST polling) meant a network-level failure outside my control became a minor UX trade-off (10s latency) instead of a broken feature.
-- **Reproduce the failure mode, not just the fix.** Since the real blocking network wasn't available to test against directly, simulating its exact behavior (handshake succeeds, zero messages) let me verify the fallback under the same conditions that exposed the original bug.
+- A "connected" indicator only tells you the pipe is open, not that anything is flowing through it. If a live feed goes quiet, it's worth checking those separately instead of assuming they're the same thing.
+- When you're stuck, add logging before you add opinions. One `console.log` per state told me more in five minutes than twenty minutes of guessing did.
+- If a data source can fail silently and it's outside your control, don't just hope it doesn't. Give yourself a second way to get the same data, so a network hiccup somewhere becomes a minor slowdown instead of a broken feature.
+- To trust a fix, try to recreate the actual failure and test against that — not just the happy path.
